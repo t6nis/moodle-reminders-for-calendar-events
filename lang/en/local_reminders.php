@@ -69,3 +69,5 @@ $string['sendactivityreminders'] = 'Activity reminders:';
 $string['siteheading'] = 'Site Event Reminders';
 $string['titlesubjectprefix'] = 'Reminder';
 $string['userheading'] = 'User Event Reminders';
+$string['reminderruntask'] = 'Reminder task';
+$string['reminderrunevent'] = 'Reminder task run';

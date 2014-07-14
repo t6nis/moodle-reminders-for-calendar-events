@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Reminder plugin version information
+ * reminder_run event.
  *
  * @package    local
  * @subpackage reminders
@@ -23,11 +23,38 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+namespace local_reminders\event;
+
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2014140700;
-$plugin->requires  = 2013051400;  
-$plugin->release   = '2.0.0';
-$plugin->maturity  = MATURITY_RC;
-$plugin->component = 'local_reminders';       
 
+class reminder_run extends \core\event\base {
+
+    /**
+     * Init method.
+     *
+     * @return void
+     */
+    protected function init() {
+        $this->data['crud'] = 'u';
+        $this->data['edulevel'] = self::LEVEL_OTHER;
+    }
+
+    /**
+     * Return localised event name.
+     *
+     * @return string
+     */
+    public static function get_name() {
+        return get_string('reminderrunevent', 'local_reminders');
+    }
+
+    /**
+     * Returns description of what happened.
+     *
+     * @return string
+     */
+    public function get_description() {
+        return "Run reminder at " .gmdate("H:i:s d-m-Y", $this->other);
+    }
+}
