@@ -37,14 +37,3 @@ DEFINE('REMINDERS_SEND_ONLY_VISIBLE', 51);
 DEFINE('REMINDERS_ACTIVITY_BOTH', 60);
 DEFINE('REMINDERS_ACTIVITY_ONLY_OPENINGS', 61);
 DEFINE('REMINDERS_ACTIVITY_ONLY_CLOSINGS', 62);
-
-/// FUNCTIONS ///////////////////////////////////////////////////////////
-
-/**
- * Function to be run periodically according to the moodle cron
- * Finds all events due for a reminder and send them out to the users.
- *  
- */
-function local_reminders_cron() {
-
-}

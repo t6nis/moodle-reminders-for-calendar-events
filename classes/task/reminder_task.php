@@ -354,7 +354,7 @@ class reminder_task extends \core\task\scheduled_task {
         } else {
             // info field includes that starting time of last cron cycle.
             $firstrecord = current($events);
-            $timewindowstart = $firstrecord->other + 1;
+            $timewindowstart = json_decode($firstrecord->other)->timewindowend + 1;
         }
 
         // end of the time window will be set as current
@@ -387,10 +387,14 @@ class reminder_task extends \core\task\scheduled_task {
 
         $upcomingevents = $DB->get_records_select('event', $whereclause);
         if ($upcomingevents == false) {     // no upcoming events, so let's stop.
-            mtrace("   [Local Reminder] No upcming events. Aborting...");
+            mtrace("   [Local Reminder] No upcoming events. Aborting...");
             $event = \local_reminders\event\reminder_run::create(array(
                 'contextid' => 1,
-                'other' => $timewindowend.'',
+                'other' => json_encode(array(
+                    'timewindowend' => $timewindowend,
+                    'sendcount' => 0,
+                    'failedcount' => 0
+                ))
             ));
             $event->trigger();
             //add_to_log(0, 'local_reminders', 'cron', '', $timewindowend, 0, 0);
@@ -599,7 +603,7 @@ class reminder_task extends \core\task\scheduled_task {
 
             mtrace("  [Local Reminder] Starting sending reminders for $event->id [type: $event->eventtype]");
             $failedcount = 0;
-
+            $sendcount= 0;
             foreach ($sendusers as $touser) {
                 $eventdata = $reminder->set_sendto_user($touser);
                 //$eventdata->userto = $touser;
@@ -616,6 +620,8 @@ class reminder_task extends \core\task\scheduled_task {
 
                     if (!$mailresult) {
                         throw new \coding_exception("Could not send out message for event#$event->id to user $eventdata->userto");
+                    }else{
+                        $sendcount++;
                     }
                 } catch (moodle_exception $mex) {
                     $failedcount++;
@@ -635,7 +641,11 @@ class reminder_task extends \core\task\scheduled_task {
 
         $event = \local_reminders\event\reminder_run::create(array(
             'contextid' => 1,
-            'other' => $timewindowend.'',
+            'other' => json_encode(array(
+                'timewindowend' => $timewindowend,
+                'sendcount' => $sendcount,
+                'failedcount' => $failedcount
+            ))
         ));
         $event->trigger();
         //add_to_log(0, 'local_reminders', 'cron', '', $timewindowend, 0, 0);

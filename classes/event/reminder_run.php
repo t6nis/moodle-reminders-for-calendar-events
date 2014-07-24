@@ -55,6 +55,7 @@ class reminder_run extends \core\event\base {
      * @return string
      */
     public function get_description() {
-        return "Run reminder at " .gmdate("H:i:s d-m-Y", $this->other);
+        $other = json_decode($this->other);
+        return "Run reminder: " . userdate($other->timewindowend) .'<br> success: '. $other->sendcount . '/ failed: ' .  $other->failedcount ;
     }
 }
