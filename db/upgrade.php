@@ -47,7 +47,7 @@ function xmldb_local_reminders_upgrade($oldversion) {
     $dbman = $DB->get_manager(); // loads ddl manager and xmldb classes
 
 
-    if (($oldversion > 2013120700) AND ($oldversion < 2014310700)) {
+    if (($oldversion > 2013120700) AND ($oldversion < 2014073100)) {
         //migration from json format
 
         // remove all reminder records
