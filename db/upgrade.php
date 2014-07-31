@@ -47,8 +47,24 @@ function xmldb_local_reminders_upgrade($oldversion) {
     $dbman = $DB->get_manager(); // loads ddl manager and xmldb classes
 
 
-    // Moodle v2.2.0 release upgrade line
-    // Put any upgrade step following this
+    if (($oldversion > 2014140700) AND ($oldversion < 2014310700)) {
+        //migration from json format
+
+        // remove all reminder records
+        $DB->delete_records_select('logstore_standard_log', "eventname = '\\local_reminders\\event\\reminder_run'");
+
+        // add an initial reminder record 5min past
+        $event = \local_reminders\event\reminder_run::create(
+            array(
+                'contextid' => 1,
+                'other' => array(
+                    'timewindowend' => time() - 300,
+                    'sendcount' => 0,
+                    'failedcount' => 0
+                ))
+        );
+        $event->trigger();
+    }
 
     return true;
 }
