@@ -49,10 +49,11 @@ class reminder_task extends \core\task\scheduled_task {
      * Throw exceptions on errors (the job will be retried).
      */
     public function execute() {
-        global $CFG;
+        global $CFG, $LASTRUN;
 
         // Run reminder cron.
         require_once("{$CFG->dirroot}/local/reminders/lib.php");
+        $LASTRUN = $this->get_last_run_time();
         local_reminders_cron();
     }
 

@@ -65,7 +65,7 @@ DEFINE('REMINDERS_ACTIVITY_ONLY_CLOSINGS', 62);
  *
  */
 function local_reminders_cron() {
-    global $CFG, $DB;
+    global $CFG, $DB, $LASTRUN;
 
     // 2.7 onwards we would like to be called from taks calls
     if (!defined('REMINDER_CALLED_FROM_TASK') AND $CFG->version > 2014051200){
@@ -98,36 +98,22 @@ function local_reminders_cron() {
         }
     }
 
-    /* $params = array();
-     $selector = "l.course = 0 AND l.module = 'local_reminders' AND l.action = 'cron'";
-     $totalcount = 0;
-     $logrows = get_logs($selector, $params, 'l.time DESC', '', 1, $totalcount);*/
-
-
-    if ($CFG->version > 2014051200) { // Moodle 2.7+
-        $logmanger = get_log_manager();
-        $readers = $logmanger->get_readers('\core\log\sql_select_reader');
-        $reader = reset($readers);
-
-        $params = array('component' => 'local_reminders', 'eventname' => '\local_reminders\event\reminder_run');
-        $select = "component = :component AND eventname = :eventname";
-        $events = $reader->get_events_select($select, $params, 'timecreated DESC', 0, 1);
-    }else{
+    if ($CFG->version <= 2014051200) { // Moodle 2.7+
         $totalcount = 0;
         $params = array();
         $select = "l.course = 0 AND l.module = 'local_reminders' AND l.action = 'cron'";
-        $events = get_logs($select, $params, 'l.time DESC', '', 1, $totalcount);
+        $LASTRUN = get_logs($select, $params, 'l.time DESC', '', 1, $totalcount);
     }
     $timewindowstart = time();
-    if (empty($events) ) {  // this is the first cron cycle, after plugin is just installed
+    if (empty($LASTRUN) ) {  // this is the first cron cycle, after plugin is just installed
         mtrace("   [Local Reminder] This is the first cron cycle");
         $timewindowstart = $timewindowstart - REMINDERS_FIRST_CRON_CYCLE_CUTOFF_DAYS * 24 * 3600;
     } else {
-        // info field includes that starting time of last cron cycle.
-        $firstrecord = current($events);
         if ($CFG->version > 2014051200) { // Moodle 2.7+
-            $timewindowstart = $firstrecord->other['timewindowend'] + 1;
+            $timewindowstart = $LASTRUN + 1;
         }else{
+            // info field includes that starting time of last cron cycle.
+            $firstrecord = current($LASTRUN);
             $timewindowstart = $firstrecord->info + 1;
         }
     }
@@ -163,18 +149,7 @@ function local_reminders_cron() {
     $upcomingevents = $DB->get_records_select('event', $whereclause);
     if ($upcomingevents == false) {     // no upcoming events, so let's stop.
         mtrace("   [Local Reminder] No upcoming events. Aborting...");
-        if ($CFG->version > 2014051200) { // Moodle 2.7+
-            $event = \local_reminders\event\reminder_run::create(
-                array(
-                    'contextid' => 1,
-                    'other' => array(
-                        'timewindowend' => $timewindowend,
-                        'sendcount' => 0,
-                        'failedcount' => 0
-                 ))
-            );
-            $event->trigger();
-        }else{
+        if ($CFG->version <= 2014051200) { // Moodle 2.7+
             add_to_log(0, 'local_reminders', 'cron', '', $timewindowend, 0, 0);
         }
         return;
@@ -427,7 +402,6 @@ function local_reminders_cron() {
             array(
                 'contextid' => 1,
                 'other' => array(
-                    'timewindowend' => $timewindowend,
                     'sendcount' => $sendcount,
                     'failedcount' => $failedcount
                 ))

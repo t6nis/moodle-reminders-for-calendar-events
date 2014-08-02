@@ -63,5 +63,5 @@ $string['sendactivityreminders'] = 'Erinnerung an Aktivit&auml;t:';
 $string['siteheading'] = 'Webseiten-weite Erinnerungen';
 $string['titlesubjectprefix'] = 'Erinnerung';
 $string['userheading'] = 'Erinnerung an benutzerspezifische Ereignisse';
-$string['reminderruntask'] = 'Termin-Notifikations-Task';
-$string['reminderrunevent'] = 'Termin-Notifikations-Task ausgeführt';
+$string['reminderruntask'] = 'Terminerinnerungs-Task';
+$string['reminderrunevent'] = 'Terminerinnerungen gesendet';

@@ -55,7 +55,7 @@ class reminder_run extends \core\event\base {
      * @return string
      */
     public function get_description() {
-        return "Run reminder: " . userdate($this->other['timewindowend']) .'<br> success: '. $this->other['sendcount'] . ' / failed: ' .  $this->other['failedcount'] ;
+        return 'Reminder stats: success: '. $this->other['sendcount'] . ' / failed: ' .  $this->other['failedcount'] ;
     }
 
     /*public function get_legacy_logdata() {
