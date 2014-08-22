@@ -158,7 +158,9 @@ function local_reminders_cron() {
     mtrace("   [Local Reminder] Found ".count($upcomingevents)." upcoming events. Continuing...");
 
     $fromuser = get_admin();
-
+    $fromuser->email = 'noreply@moodle.ut.ee';
+    $fromuser->firstname = 'UT';
+    $fromuser->lastname = 'Moodle';
     // iterating through each event...
     foreach ($upcomingevents as $event) {
         $event = \calendar_event::create($event, false);
