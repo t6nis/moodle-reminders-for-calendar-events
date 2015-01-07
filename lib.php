@@ -163,6 +163,15 @@ function local_reminders_cron() {
     $fromuser->lastname = 'Moodle';
     // iterating through each event...
     foreach ($upcomingevents as $event) {
+        
+        $course = $DB->get_record('course', array('id' => $event->courseid));
+        if (!empty($course)) {    
+            if (!$course->visible) {
+                mtrace("   [Local Reminder] Skipping course #$event->courseid because it is in hidden state.");
+                continue; // 16.09.2014 - Skip hidden courses.
+            }
+        }
+
         $event = \calendar_event::create($event, false);
 
         $aheadday = 0;
@@ -360,7 +369,27 @@ function local_reminders_cron() {
         mtrace("  [Local Reminder] Starting sending reminders for $event->id [type: $event->eventtype]");
         $failedcount = 0;
         $sendcount= 0;
+
+
+        $courseid = $event->courseid;
+        if ($courseid > 0) {
+            $coursecontext = context_course::instance($courseid);
+            // 14.10.2014 - Reminders notification logging.
+        }
+
+        create_logfile('---Log time:'.date('d-m-y H:i:s').'<br />Sending init for eventid:'.$event->id.'(CourseID:'.$courseid.' Type:'.$event->eventtype.')!!!<br />', $event->eventtype);
+
         foreach ($sendusers as $touser) {
+
+            if (isset($coursecontext) && !has_capability('local/reminders:notifications', $coursecontext, $touser)) {
+                mtrace("   [Local Reminder] Skipping notification sending to $touser->firstname $touser->lastname because the capability for this role is disabled on course.");
+                // 14.10.2014 - Reminders notification logging.
+                create_logfile('CourseID:'.$courseid.'('.$course->shortname.')#Skipping sending to - '.$touser->firstname.' '.$touser->lastname.'('.$touser->username.') - .<br />', $event->eventtype);
+                continue; // 17.09.2014 - Skipping notifications if teacher has disabled the capability on course.
+            }
+
+            create_logfile('CourseID:'.$courseid.'#Sending to - ' . $touser->firstname . ' ' . $touser->lastname . '(' . $touser->username . ') - .<br />', $event->eventtype);
+
             $eventdata = $reminder->set_sendto_user($touser);
             //$eventdata->userto = $touser;
 
@@ -390,6 +419,9 @@ function local_reminders_cron() {
             }
         }
 
+        //14.10.2014 - Finish logging for course
+        create_logfile('Sending finished for eventid:'.$event->id.'(CourseID:'.$courseid.' Type:'.$event->eventtype.')!!!<br />Log time:'.date('d-m-y H:i:s').'---<br />', $event->eventtype);
+
         if ($failedcount > 0) {
             mtrace("  [Local Reminder] Failed to send $failedcount reminders to users for event#$event->id");
         } else {
@@ -412,6 +444,30 @@ function local_reminders_cron() {
     }else{
         add_to_log(0, 'local_reminders', 'cron', '', $timewindowend, 0, 0);
     }
+}
+
+//create log file
+function create_logfile($string, $course = '', $type = 'student') {
+
+    global $CFG;
+
+    $path = $CFG->dirroot.'/local/reminders/logs';
+
+    if (!is_dir($path)) {
+        if (!mkdir($path, 0755)) {
+            echo "failed to create dir";
+        }
+    }
+
+    if ($fh = fopen($path.'/'.date("d_m_y").'_'.$type.'_logfile.log', 'a+')) {
+        //$string = "Log time:".date('d-m-y H:i:s')."!---\nCourse: ".$course."\n".$string."Log end!---\n";
+        fwrite($fh, utf8_decode(str_replace("<br />", "\n", $string)));
+        fclose($fh);
+        return true;
+    } else {
+        return false;
+    }
+
 }
 
 /**

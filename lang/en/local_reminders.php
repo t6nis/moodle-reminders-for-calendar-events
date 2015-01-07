@@ -71,3 +71,4 @@ $string['titlesubjectprefix'] = 'Reminder';
 $string['userheading'] = 'User Event Reminders';
 $string['reminderruntask'] = 'Reminder task';
 $string['reminderrunevent'] = 'Reminder task send notifications';
+$string['reminders:notifications'] = 'Send reminder notifications?';
