@@ -407,7 +407,6 @@ function local_reminders_cron() {
                     $mailresult = message_send($eventdata);
                 }
 
-
                 if (!$mailresult) {
                     throw new \coding_exception("Could not send out message for event#$event->id to user $eventdata->userto");
                 }else{
@@ -415,7 +414,7 @@ function local_reminders_cron() {
                 }
             } catch (moodle_exception $mex) {
                 $failedcount++;
-                mtrace('Error: local/reminders/lib.php local_reminders_cron(): '.$mex.getMessage());
+                mtrace('Error: local/reminders/lib.php local_reminders_cron(): '.$mex->getMessage());
             }
         }
 
