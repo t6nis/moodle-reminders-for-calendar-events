@@ -33,9 +33,14 @@ require_once($CFG->dirroot . '/calendar/lib.php');
 require_once($CFG->dirroot . '/group/lib.php');
 require_once($CFG->libdir . '/accesslib.php');
 
+require_once($CFG->dirroot . '/availability/classes/info_module.php');
+require_once($CFG->libdir . '/modinfolib.php');
+
 /// CONSTANTS ///////////////////////////////////////////////////////////
 
-DEFINE('REMINDERS_FIRST_CRON_CYCLE_CUTOFF_DAYS', 2);
+DEFINE('REMINDERS_DAYIN_SECONDS', 24 * 3600);
+
+DEFINE('REMINDERS_FIRST_CRON_CYCLE_CUTOFF_DAYS', 5);
 
 DEFINE('REMINDERS_7DAYSBEFORE_INSECONDS', 7*24*3600);
 DEFINE('REMINDERS_3DAYSBEFORE_INSECONDS', 3*24*3600);
@@ -64,7 +69,8 @@ function local_reminders_cron() {
     }
        
     $aheaddaysindex = array(7 => 0, 3 => 1, 1 => 2);
-    
+    $eventtypearray = array('site', 'user', 'course', 'due', 'group');
+
     // loading roles allowed to receive reminder messages from configuration
     //
     $allroles = get_all_roles();
@@ -109,12 +115,21 @@ function local_reminders_cron() {
     
     // end of the time window will be set as current
     $timewindowend = time();
-    
+
     // now lets filter appropiate events to send reminders
     //
     $secondsaheads = array(REMINDERS_7DAYSBEFORE_INSECONDS, REMINDERS_3DAYSBEFORE_INSECONDS, 
         REMINDERS_1DAYBEFORE_INSECONDS);
-    
+
+    // append custom schedule if any of event categories has defined it.
+    foreach ($eventtypearray as $etype) {
+        $tempconfigstr = 'local_reminders_'.$etype.'custom';
+        if (isset($CFG->$tempconfigstr) && !empty($CFG->$tempconfigstr)
+            && $CFG->$tempconfigstr > 0 && !in_array($CFG->$tempconfigstr, $secondsaheads)) {
+            array_push($secondsaheads, $CFG->$tempconfigstr);
+        }
+    }
+
     $whereclause = '(timestart > '.$timewindowend.') AND (';
     $flagor = false;
     foreach ($secondsaheads as $sahead) {
@@ -132,7 +147,7 @@ function local_reminders_cron() {
             $whereclause .= 'AND visible = 1';
         }
     }
-    
+
     mtrace("   [Local Reminder] Time window: ".userdate($timewindowstart)." to ".userdate($timewindowend));
     
     $upcomingevents = $DB->get_records_select('event', $whereclause);
@@ -152,7 +167,8 @@ function local_reminders_cron() {
         $event = new calendar_event($event);
 
         $aheadday = 0;
-        
+        $fromcustom = false;
+
         if ($event->timestart - REMINDERS_1DAYBEFORE_INSECONDS >= $timewindowstart && 
                 $event->timestart - REMINDERS_1DAYBEFORE_INSECONDS <= $timewindowend) {
             $aheadday = 1;
@@ -162,34 +178,52 @@ function local_reminders_cron() {
         } else if ($event->timestart - REMINDERS_7DAYSBEFORE_INSECONDS >= $timewindowstart && 
                 $event->timestart - REMINDERS_7DAYSBEFORE_INSECONDS <= $timewindowend) {
             $aheadday = 7;
+        } else {
+            // find if custom schedule has been defined by user...
+            $tempconfigstr = 'local_reminders_'.$event->eventtype.'custom';
+            if (isset($CFG->$tempconfigstr) && !empty($CFG->$tempconfigstr) && $CFG->$tempconfigstr > 0) {
+                $customsecs = $CFG->$tempconfigstr;
+                if ($event->timestart - $customsecs >= $timewindowstart &&
+                    $event->timestart - $customsecs <= $timewindowend) {
+                    $aheadday = $customsecs / (REMINDERS_DAYIN_SECONDS * 1.0);
+                    mtrace($aheadday);
+                    $fromcustom = true;
+                }
+            }
         }
         
         if ($aheadday == 0) continue;
         mtrace("   [Local Reminder] Processing event#$event->id [Type: $event->eventtype, inaheadof=$aheadday days]...");
-        
-        $optionstr = 'local_reminders_'.$event->eventtype.'rdays';
-        if (!isset($CFG->$optionstr)) {
-            if ($event->modulename) {
-                $optionstr = 'local_reminders_duerdays';
-            } else {
-                mtrace("   [Local Reminder] Couldn't find option for event $event->id [type: $event->eventtype]");
+
+        if (!$fromcustom) {
+            $optionstr = 'local_reminders_' . $event->eventtype . 'rdays';
+            if (!isset($CFG->$optionstr)) {
+                if ($event->modulename) {
+                    $optionstr = 'local_reminders_duerdays';
+                } else {
+                    mtrace("   [Local Reminder] Couldn't find option for event $event->id [type: $event->eventtype]");
+                    continue;
+                }
+            }
+
+            $options = $CFG->$optionstr;
+
+            if (empty($options) || $options == null) {
+                mtrace("   [Local Reminder] No configuration for eventtype $event->eventtype " .
+                    "[event#$event->id is ignored!]...");
                 continue;
             }
-        }
-        
-        $options = $CFG->$optionstr;
-        
-        if (empty($options) || $options == null) {
-            mtrace("   [Local Reminder] No configuration for eventtype $event->eventtype ".
+
+            // this reminder will not be set up to send by configurations
+            if ($options[$aheaddaysindex[$aheadday]] == '0') {
+                mtrace("   [Local Reminder] No reminder is due in ahead of $aheadday for eventtype $event->eventtype " .
                     "[event#$event->id is ignored!]...");
-            continue;
-        }
-        
-        // this reminder will not be set up to send by configurations
-        if ($options[$aheaddaysindex[$aheadday]] == '0') {
-            mtrace("   [Local Reminder] No reminder is due in ahead of $aheadday for eventtype $event->eventtype ".
-                    "[event#$event->id is ignored!]...");
-            continue;
+                continue;
+            }
+
+        } else {
+            mtrace("   [Local Reminder] A reminder can be sent for event#$event->id ".
+                    ", detected through custom schedule.");
         }
         
         $reminder = null;
@@ -257,21 +291,22 @@ function local_reminders_cron() {
                 case 'due':
 
                     if (!isemptyString($event->modulename)) {
-                        $course = $DB->get_record('course', array('id' => $event->courseid));
-                        $cm = get_coursemodule_from_instance($event->modulename, $event->instance, $event->courseid);
+                        $courseandcm = get_course_and_cm_from_instance($event->instance, $event->modulename, $event->courseid);
+                        $course = $courseandcm[0];
+                        $cm = $courseandcm[1];
 
                         if (!empty($course) && !empty($cm)) {
                             $activityobj = fetch_module_instance($event->modulename, $event->instance, $event->courseid);
                             $context = context_module::instance($cm->id); //get_context_instance(CONTEXT_MODULE, $cm->id);
 
-                            // patch provided by Julien Boulen (jboulen)
-                            // to prevent a user receives an alert for an activity that he can't see.
-                            //
-                            if ($cm->groupmembersonly === '0') {
-                                $sendusers = get_role_users($activityroleids, $context, true, 'u.*');
-                            } else {
-                                $sendusers = groups_get_grouping_members($cm->groupingid);
-                            }
+                            // 'ra.id field added to avoid printing debug message from get_role_users (has odd behaivior when called with an array for $roleid param'
+                            $sendusers = get_role_users($activityroleids, $context, true, 'ra.id, u.*');
+
+                            // filter user list, replacement for deprecated/removed $cm->groupmembersonly & groups_get_grouping_members($cm->groupingid);
+                            //   see: https://docs.moodle.org/dev/Availability_API#Display_a_list_of_users_who_may_be_able_to_access_the_current_activity
+                            $info = new \core_availability\info_module($cm);
+                            $sendusers = $info->filter_user_list($sendusers);
+
                             $reminder = new due_reminder($event, $course, $context, $aheadday);
                             $reminder->set_activity($event->modulename, $activityobj);
                             $eventdata = $reminder->create_reminder_message_object($fromuser);
