@@ -42,9 +42,14 @@ require_once($CFG->dirroot . '/calendar/lib.php');
 require_once($CFG->dirroot . '/group/lib.php');
 require_once($CFG->libdir . '/accesslib.php');
 
+require_once($CFG->dirroot . '/availability/classes/info_module.php');
+require_once($CFG->libdir . '/modinfolib.php');
+
 /// CONSTANTS ///////////////////////////////////////////////////////////
 
-DEFINE('REMINDERS_FIRST_CRON_CYCLE_CUTOFF_DAYS', 2);
+DEFINE('REMINDERS_DAYIN_SECONDS', 24 * 3600);
+
+DEFINE('REMINDERS_FIRST_CRON_CYCLE_CUTOFF_DAYS', 5);
 
 DEFINE('REMINDERS_7DAYSBEFORE_INSECONDS', 7*24*3600);
 DEFINE('REMINDERS_3DAYSBEFORE_INSECONDS', 3*24*3600);
@@ -56,6 +61,9 @@ DEFINE('REMINDERS_SEND_ONLY_VISIBLE', 51);
 DEFINE('REMINDERS_ACTIVITY_BOTH', 60);
 DEFINE('REMINDERS_ACTIVITY_ONLY_OPENINGS', 61);
 DEFINE('REMINDERS_ACTIVITY_ONLY_CLOSINGS', 62);
+
+DEFINE('REMINDERS_SEND_AS_NO_REPLY', 70);
+DEFINE('REMINDERS_SEND_AS_ADMIN', 71);
 
 /// FUNCTIONS ///////////////////////////////////////////////////////////
 
@@ -79,6 +87,8 @@ function local_reminders_cron() {
 
     $aheaddaysindex = array(7 => 0, 3 => 1, 1 => 2);
 
+    $eventtypearray = array('site', 'user', 'course', 'due', 'group');
+
     // loading roles allowed to receive reminder messages from configuration
     //
     $allroles = get_all_roles();
@@ -87,11 +97,11 @@ function local_reminders_cron() {
         $flag = 0;
         foreach ($allroles as $arole) {
             $roleoptionactivity = $CFG->local_reminders_activityroles;
-            if ($roleoptionactivity[$flag] == '1') {
+            if (isset($roleoptionactivity[$flag]) && $roleoptionactivity[$flag] == '1') {
                 $activityroleids[] = $arole->id;
             }
             $roleoption = $CFG->local_reminders_courseroles;
-            if ($roleoption[$flag] == '1') {
+            if (isset($roleoption[$flag]) && $roleoption[$flag] == '1') {
                 $courseroleids[] = $arole->id;
             }
             $flag++;
@@ -126,6 +136,15 @@ function local_reminders_cron() {
     $secondsaheads = array(REMINDERS_7DAYSBEFORE_INSECONDS, REMINDERS_3DAYSBEFORE_INSECONDS,
         REMINDERS_1DAYBEFORE_INSECONDS);
 
+    // append custom schedule if any of event categories has defined it.
+    foreach ($eventtypearray as $etype) {
+        $tempconfigstr = 'local_reminders_'.$etype.'custom';
+        if (isset($CFG->$tempconfigstr) && !empty($CFG->$tempconfigstr)
+            && $CFG->$tempconfigstr > 0 && !in_array($CFG->$tempconfigstr, $secondsaheads)) {
+            array_push($secondsaheads, $CFG->$tempconfigstr);
+        }
+    }
+
     $whereclause = '(timestart > '.$timewindowend.') AND (';
     $flagor = false;
     foreach ($secondsaheads as $sahead) {
@@ -146,6 +165,9 @@ function local_reminders_cron() {
 
     mtrace("   [Local Reminder] Time window: ".userdate($timewindowstart)." to ".userdate($timewindowend));
 
+    //mtrace("   [Local Reminder] Time window: ".$timewindowstart." to ".$timewindowend);
+    //mtrace("   [Local Reminder] Where clause: ".$whereclause);
+
     $upcomingevents = $DB->get_records_select('event', $whereclause);
     if ($upcomingevents == false) {     // no upcoming events, so let's stop.
         mtrace("   [Local Reminder] No upcoming events. Aborting...");
@@ -161,6 +183,10 @@ function local_reminders_cron() {
     $fromuser->email = 'noreply@moodle.ut.ee';
     $fromuser->firstname = 'UT';
     $fromuser->lastname = 'Moodle';
+    
+    $failedcount = 0;
+    $sendcount = 0;
+    
     // iterating through each event...
     foreach ($upcomingevents as $event) {
         
@@ -176,8 +202,10 @@ function local_reminders_cron() {
 
         $aheadday = 0;
 
-        if ($event->timestart - REMINDERS_1DAYBEFORE_INSECONDS >= $timewindowstart &&
-            $event->timestart - REMINDERS_1DAYBEFORE_INSECONDS <= $timewindowend) {
+        $fromcustom = false;
+
+        if ($event->timestart - REMINDERS_1DAYBEFORE_INSECONDS >= $timewindowstart && 
+                $event->timestart - REMINDERS_1DAYBEFORE_INSECONDS <= $timewindowend) {
             $aheadday = 1;
         } else if ($event->timestart - REMINDERS_3DAYSBEFORE_INSECONDS >= $timewindowstart &&
             $event->timestart - REMINDERS_3DAYSBEFORE_INSECONDS <= $timewindowend) {
@@ -185,34 +213,52 @@ function local_reminders_cron() {
         } else if ($event->timestart - REMINDERS_7DAYSBEFORE_INSECONDS >= $timewindowstart &&
             $event->timestart - REMINDERS_7DAYSBEFORE_INSECONDS <= $timewindowend) {
             $aheadday = 7;
+        } else {
+            // find if custom schedule has been defined by user...
+            $tempconfigstr = 'local_reminders_'.$event->eventtype.'custom';
+            if (isset($CFG->$tempconfigstr) && !empty($CFG->$tempconfigstr) && $CFG->$tempconfigstr > 0) {
+                $customsecs = $CFG->$tempconfigstr;
+                if ($event->timestart - $customsecs >= $timewindowstart &&
+                    $event->timestart - $customsecs <= $timewindowend) {
+                    $aheadday = $customsecs / (REMINDERS_DAYIN_SECONDS * 1.0);
+                    mtrace($aheadday);
+                    $fromcustom = true;
+                }
+            }
         }
 
         if ($aheadday == 0) continue;
         mtrace("   [Local Reminder] Processing event#$event->id [Type: $event->eventtype, inaheadof=$aheadday days]...");
 
-        $optionstr = 'local_reminders_'.$event->eventtype.'rdays';
-        if (!isset($CFG->$optionstr)) {
-            if ($event->modulename) {
-                $optionstr = 'local_reminders_duerdays';
-            } else {
-                mtrace("   [Local Reminder] Couldn't find option for event $event->id [type: $event->eventtype]");
+        if (!$fromcustom) {
+            $optionstr = 'local_reminders_' . $event->eventtype . 'rdays';
+            if (!isset($CFG->$optionstr)) {
+                if ($event->modulename) {
+                    $optionstr = 'local_reminders_duerdays';
+                } else {
+                    mtrace("   [Local Reminder] Couldn't find option for event $event->id [type: $event->eventtype]");
+                    continue;
+                }
+            }
+
+            $options = $CFG->$optionstr;
+
+            if (empty($options) || $options == null) {
+                mtrace("   [Local Reminder] No configuration for eventtype $event->eventtype " .
+                    "[event#$event->id is ignored!]...");
                 continue;
             }
-        }
 
-        $options = $CFG->$optionstr;
+            // this reminder will not be set up to send by configurations
+            if ($options[$aheaddaysindex[$aheadday]] == '0') {
+                mtrace("   [Local Reminder] No reminder is due in ahead of $aheadday for eventtype $event->eventtype " .
+                    "[event#$event->id is ignored!]...");
+                continue;
+            }
 
-        if (empty($options) || $options == null) {
-            mtrace("   [Local Reminder] No configuration for eventtype $event->eventtype ".
-                "[event#$event->id is ignored!]...");
-            continue;
-        }
-
-        // this reminder will not be set up to send by configurations
-        if ($options[$aheaddaysindex[$aheadday]] == '0') {
-            mtrace("   [Local Reminder] No reminder is due in ahead of $aheadday for eventtype $event->eventtype ".
-                "[event#$event->id is ignored!]...");
-            continue;
+        } else {
+            mtrace("   [Local Reminder] A reminder can be sent for event#$event->id ".
+                    ", detected through custom schedule.");
         }
 
         $reminder = null;
@@ -246,10 +292,17 @@ function local_reminders_cron() {
 
                 case 'course':
                     $course = $DB->get_record('course', array('id' => $event->courseid));
+                    $coursesettings = $DB->get_record('local_reminders_course', array('courseid'=>$event->courseid));
+                    if (isset($coursesettings->status_course) && $coursesettings->status_course == 0) {
+                        mtrace("  [Local Reminder] Reminder sending for course events has been restricted in the course specific configurations.");
+                        break;
+                    }
 
                     if (!empty($course)) {
-                        $context = context_course::instance($course->id);
-                        $sendusers = get_role_users($courseroleids, $context, true, 'u.*');
+                        $context = context_course::instance($course->id); //get_context_instance(CONTEXT_COURSE, $course->id);
+                        $roleusers = get_role_users($courseroleids, $context, true, 'ra.id as ra_id, u.*');
+                        $senduserids = array_map(function($u) { return $u->id; }, $roleusers);
+                        $sendusers = array_combine($senduserids, $roleusers);
 
                         // create reminder object...
                         //
@@ -282,6 +335,11 @@ function local_reminders_cron() {
                     if (!isemptyString($event->modulename)) {
                         $course = $DB->get_record('course', array('id' => $event->courseid));
                         $cm = get_coursemodule_from_instance($event->modulename, $event->instance, $event->courseid);
+                        $coursesettings = $DB->get_record('local_reminders_course', array('courseid'=>$event->courseid));
+                        if (isset($coursesettings->status_activities) && $coursesettings->status_activities == 0) {
+                            mtrace("  [Local Reminder] Reminder sending for activities has been restricted in the course specific configurations.");
+                            break;
+                        }
 
                         if (!empty($course) && !empty($cm)) {
                             $activityobj = fetch_module_instance($event->modulename, $event->instance, $event->courseid);
@@ -307,6 +365,12 @@ function local_reminders_cron() {
                     $group = $DB->get_record('groups', array('id' => $event->groupid));
 
                     if (!empty($group)) {
+                        $coursesettings = $DB->get_record('local_reminders_course', array('courseid'=>$group->courseid));
+                        if (isset($coursesettings->status_group) && $coursesettings->status_group == 0) {
+                            mtrace("  [Local Reminder] Reminder sending for group events has been restricted in the course specific configurations.");
+                            break;
+                        }
+
                         $reminder = new group_reminder($event, $group, $aheadday);
 
                         // add module details, if this event is a mod type event
@@ -317,14 +381,7 @@ function local_reminders_cron() {
                         }
                         $eventdata = $reminder->create_reminder_message_object($fromuser);
 
-                        $groupmemberroles = groups_get_members_by_role($group->id, $group->courseid, 'u.id');
-                        if ($groupmemberroles) {
-                            foreach($groupmemberroles as $roleid => $roledata) {
-                                foreach($roledata->users as $member) {
-                                    $sendusers[] = $DB->get_record('user', array('id' => $member->id));
-                                }
-                            }
-                        }
+                        $sendusers = get_users_in_group($group);
                     }
 
                     break;
@@ -351,7 +408,8 @@ function local_reminders_cron() {
 
         } catch (Exception $ex) {
             mtrace("  [Local Reminder - ERROR] Error occured when initializing ".
-                "for event#[$event->id] (type: $event->eventtype) ".$ex.getMessage());
+                    "for event#[$event->id] (type: $event->eventtype) ".$ex->getMessage());
+            mtrace("  [Local Reminder - ERROR] ".$ex->getTraceAsString());
             continue;
         }
 
@@ -368,7 +426,7 @@ function local_reminders_cron() {
 
         mtrace("  [Local Reminder] Starting sending reminders for $event->id [type: $event->eventtype]");
         $failedcount = 0;
-        $sendcount= 0;
+        $sendcount = 0;
 
 
         $courseid = $event->courseid;
@@ -401,12 +459,8 @@ function local_reminders_cron() {
             //mtrace($eventdata->fullmessagehtml);
             //mtrace("-----------------------------------");
             try {
-                if ($CFG->version > 2014051200) { // Moodle 2.7+
-                    $mailresult = reminder_message_send($eventdata);
-                }else{
-                    $mailresult = message_send($eventdata);
-                }
-
+                $mailresult = message_send($eventdata);
+                mtrace('[LOCAL_REMINDERS] Mail Result: '.$mailresult);
                 if (!$mailresult) {
                     throw new \coding_exception("Could not send out message for event#$event->id to user $eventdata->userto");
                 }else{
@@ -430,20 +484,19 @@ function local_reminders_cron() {
         unset($sendusers);
 
     }
-    if ($CFG->version > 2014051200) { // Moodle 2.7+
-        $event = \local_reminders\event\reminder_run::create(
-            array(
-                'contextid' => 1,
-                'other' => array(
-                    'sendcount' => $sendcount,
-                    'failedcount' => $failedcount
-                ))
-        );
-        $event->trigger();
-    }else{
-        add_to_log(0, 'local_reminders', 'cron', '', $timewindowend, 0, 0);
-    }
+    
+    $event = \local_reminders\event\reminder_run::create(
+        array(
+            'contextid' => 1,
+            'other' => array(
+                'sendcount' => $sendcount,
+                'failedcount' => $failedcount
+            ))
+    );
+    $event->trigger();
+    
 }
+
 
 //create log file
 function create_logfile($string, $course = '', $type = 'student') {
@@ -466,7 +519,40 @@ function create_logfile($string, $course = '', $type = 'student') {
     } else {
         return false;
     }
+}
 
+/**
+ * Returns all users belong to the given group.
+ *
+ * @param $group group object as received from db.
+ * @return array users in an array
+ */
+function get_users_in_group($group) {
+    global $DB;
+
+    $sendusers = array();
+    $groupmemberroles = groups_get_members_by_role($group->id, $group->courseid, 'u.id');
+    if ($groupmemberroles) {
+        foreach($groupmemberroles as $roleid => $roledata) {
+            foreach($roledata->users as $member) {
+                $sendusers[] = $DB->get_record('user', array('id' => $member->id));
+            }
+        }
+    }
+    return $sendusers;
+}
+
+/**
+ * Adds a database record to local_reminders table, to mark
+ * that the current cron cycle is over. Then we flag the time
+ * of end of the cron time window, so that no reminders sent
+ * twice.
+ *
+ * @param $timewindowend string cron window time end.
+ * @param string $crontype type of reminders cron.
+ */
+function add_flag_record_db($timewindowend, $crontype = '') {
+    global $DB;
 }
 
 /**
@@ -525,213 +611,34 @@ function isemptyString($str) {
     return !isset($str) || empty($str) || trim($str) === '';
 }
 
-/**
- * Taken from Moodle API, stripped log event generation, we don't want that every send message event goes right into our log :-)
- *
- * Returns true if input string is empty/whitespaces only, otherwise false.
- *
- * @param type $str string
- *
- * @return boolean true if string is empty or whitespace
- */
-function reminder_message_send($eventdata) {
-    global $CFG, $DB;
+// < 2.9 extends after 2.9 just extend..
+function local_reminders_extends_settings_navigation($settingsnav, $context) {
+    global $CFG, $PAGE;
 
-    //new message ID to return
-    $messageid = false;
-
-    // Fetch default (site) preferences
-    $defaultpreferences = get_message_output_default_preferences();
-    $preferencebase = $eventdata->component.'_'.$eventdata->name;
-    // If message provider is disabled then don't do any processing.
-    if (!empty($defaultpreferences->{$preferencebase.'_disable'})) {
-        return $messageid;
+    // Only add this settings item on non-site course pages.
+    if (!$PAGE->course or $PAGE->course->id == 1) {
+        return;
     }
-
-    //TODO: we need to solve problems with database transactions here somehow, for now we just prevent transactions - sorry
-    $DB->transactions_forbidden();
-
-    // By default a message is a notification. Only personal/private messages aren't notifications.
-    if (!isset($eventdata->notification)) {
-        $eventdata->notification = 1;
+ 
+    // Only let users with the appropriate capability see this settings item.
+    if (!has_capability('moodle/course:update', context_course::instance($PAGE->course->id))) {
+        return;
     }
-
-    if (is_number($eventdata->userto)) {
-        $eventdata->userto = \core_user::get_user($eventdata->userto);
-    }
-    if (is_int($eventdata->userfrom)) {
-        $eventdata->userfrom = \core_user::get_user($eventdata->userfrom);
-    }
-
-    $usertoisrealuser = (\core_user::is_real_user($eventdata->userto->id) != false);
-    // If recipient is internal user (noreply user), and emailstop is set then don't send any msg.
-    if (!$usertoisrealuser && !empty($eventdata->userto->emailstop)) {
-        debugging('Attempt to send msg to internal (noreply) user', DEBUG_NORMAL);
-        return false;
-    }
-
-    if (!isset($eventdata->userto->auth) or !isset($eventdata->userto->suspended) or !isset($eventdata->userto->deleted)) {
-        $eventdata->userto = \core_user::get_user($eventdata->userto->id);
-    }
-
-    //after how long inactive should the user be considered logged off?
-    if (isset($CFG->block_online_users_timetosee)) {
-        $timetoshowusers = $CFG->block_online_users_timetosee * 60;
-    } else {
-        $timetoshowusers = 300;//5 minutes
-    }
-
-    // Work out if the user is logged in or not
-    if (!empty($eventdata->userto->lastaccess) && (time()-$timetoshowusers) < $eventdata->userto->lastaccess) {
-        $userstate = 'loggedin';
-    } else {
-        $userstate = 'loggedoff';
-    }
-
-    // Create the message object
-    $savemessage = new \stdClass();
-    $savemessage->useridfrom        = $eventdata->userfrom->id;
-    $savemessage->useridto          = $eventdata->userto->id;
-    $savemessage->subject           = $eventdata->subject;
-    $savemessage->fullmessage       = $eventdata->fullmessage;
-    $savemessage->fullmessageformat = $eventdata->fullmessageformat;
-    $savemessage->fullmessagehtml   = $eventdata->fullmessagehtml;
-    $savemessage->smallmessage      = $eventdata->smallmessage;
-    $savemessage->notification      = $eventdata->notification;
-
-    if (!empty($eventdata->contexturl)) {
-        $savemessage->contexturl = $eventdata->contexturl;
-    } else {
-        $savemessage->contexturl = null;
-    }
-
-    if (!empty($eventdata->contexturlname)) {
-        $savemessage->contexturlname = $eventdata->contexturlname;
-    } else {
-        $savemessage->contexturlname = null;
-    }
-
-    $savemessage->timecreated = time();
-
-    // Fetch enabled processors
-    $processors = get_message_processors(true);
-
-    // Preset variables
-    $processorlist = array();
-    // Fill in the array of processors to be used based on default and user preferences
-    foreach ($processors as $processor) {
-        // Skip adding processors for internal user, if processor doesn't support sending message to internal user.
-        if (!$usertoisrealuser && !$processor->object->can_send_to_any_users()) {
-            continue;
+ 
+    if ($settingnode = $settingsnav->find('courseadmin', navigation_node::TYPE_COURSE)) {
+        $name = get_string('admintreelabel', 'local_reminders');
+        $url = new moodle_url('/local/reminders/coursesettings.php', array('courseid' => $PAGE->course->id));
+        $navnode = navigation_node::create(
+            $name,
+            $url,
+            navigation_node::NODETYPE_LEAF,
+            'reminders',
+            'reminders',
+            new pix_icon('i/calendar', $name)
+        );
+        if ($PAGE->url->compare($url, URL_MATCH_BASE)) {
+            $navnode->make_active();
         }
-
-        // First find out permissions
-        $defaultpreference = $processor->name.'_provider_'.$preferencebase.'_permitted';
-        if (isset($defaultpreferences->{$defaultpreference})) {
-            $permitted = $defaultpreferences->{$defaultpreference};
-        } else {
-            // MDL-25114 They supplied an $eventdata->component $eventdata->name combination which doesn't
-            // exist in the message_provider table (thus there is no default settings for them).
-            $preferrormsg = "Could not load preference $defaultpreference. Make sure the component and name you supplied
-                    to message_send() are valid.";
-            throw new coding_exception($preferrormsg);
-        }
-
-        // Find out if user has configured this output
-        // Some processors cannot function without settings from the user
-        $userisconfigured = $processor->object->is_user_configured($eventdata->userto);
-
-        // DEBUG: notify if we are forcing unconfigured output
-        if ($permitted == 'forced' && !$userisconfigured) {
-            debugging('Attempt to force message delivery to user who has "'.$processor->name.'" output unconfigured', DEBUG_NORMAL);
-        }
-
-        // Warn developers that necessary data is missing regardless of how the processors are configured
-        if (!isset($eventdata->userto->emailstop)) {
-            debugging('userto->emailstop is not set. Retrieving it from the user table');
-            $eventdata->userto->emailstop = $DB->get_field('user', 'emailstop', array('id'=>$eventdata->userto->id));
-        }
-
-        // Populate the list of processors we will be using
-        if ($permitted == 'forced' && $userisconfigured) {
-            // An admin is forcing users to use this message processor. Use this processor unconditionally.
-            $processorlist[] = $processor->name;
-        } else if ($permitted == 'permitted' && $userisconfigured && !$eventdata->userto->emailstop) {
-            // User has not disabled notifications
-            // See if user set any notification preferences, otherwise use site default ones
-            $userpreferencename = 'message_provider_'.$preferencebase.'_'.$userstate;
-            if ($userpreference = get_user_preferences($userpreferencename, null, $eventdata->userto->id)) {
-                if (in_array($processor->name, explode(',', $userpreference))) {
-                    $processorlist[] = $processor->name;
-                }
-            } else if (isset($defaultpreferences->{$userpreferencename})) {
-                if (in_array($processor->name, explode(',', $defaultpreferences->{$userpreferencename}))) {
-                    $processorlist[] = $processor->name;
-                }
-            }
-        }
+        $settingnode->add_node($navnode);
     }
-
-    if (empty($processorlist) && $savemessage->notification) {
-        //if they have deselected all processors and its a notification mark it read. The user doesnt want to be bothered
-        $savemessage->timeread = time();
-        $messageid = $DB->insert_record('message_read', $savemessage);
-    } else {                        // Process the message
-        // Store unread message just in case we can not send it
-        $messageid = $savemessage->id = $DB->insert_record('message', $savemessage);
-        $eventdata->savedmessageid = $savemessage->id;
-
-        // Try to deliver the message to each processor
-        if (!empty($processorlist)) {
-            foreach ($processorlist as $procname) {
-                if (!$processors[$procname]->object->send_message($eventdata)) {
-                    debugging('Error calling message processor '.$procname);
-                    $messageid = false;
-                }
-            }
-
-            //if messaging is disabled and they previously had forum notifications handled by the popup processor
-            //or any processor that puts a row in message_working then the notification will remain forever
-            //unread. To prevent this mark the message read if messaging is disabled
-            if (empty($CFG->messaging)) {
-                require_once($CFG->dirroot.'/message/lib.php');
-                $messageid = reminder_message_mark_message_read($savemessage, time());
-            } else if ( $DB->count_records('message_working', array('unreadmessageid' => $savemessage->id)) == 0){
-                //if there is no more processors that want to process this we can move message to message_read
-                require_once($CFG->dirroot.'/message/lib.php');
-                $messageid = reminder_message_mark_message_read($savemessage, time(), true);
-            }
-        }
-    }
-
-    return $messageid;
 }
-
-/**
- * Taken from Moodle API, stripped log event generation, we don't want that every send message event goes right into our log :-)
- *
- * Returns true if input string is empty/whitespaces only, otherwise false.
- *
- * @param type $str string
- *
- * @return boolean true if string is empty or whitespace
- */
-function reminder_message_mark_message_read($message, $timeread, $messageworkingempty=false) {
-    global $DB;
-
-    $message->timeread = $timeread;
-
-    $messageid = $message->id;
-    unset($message->id);//unset because it will get a new id on insert into message_read
-
-    //If any processors have pending actions abort them
-    if (!$messageworkingempty) {
-        $DB->delete_records('message_working', array('unreadmessageid' => $messageid));
-    }
-    $messagereadid = $DB->insert_record('message_read', $message);
-
-    $DB->delete_records('message', array('id' => $messageid));
-
-    return $messagereadid;
-}
-
