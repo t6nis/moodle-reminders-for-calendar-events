@@ -37,7 +37,7 @@ abstract class activity_formatter {
     protected function format_datetime($datetime, $user) {
         $tzone = 99;
         if (isset($user) && !empty($user)) {
-            $tzone = core_date::get_user_timezone($user);
+            $tzone = $user->timezone;
         }
 
         $daytimeformat = get_string('strftimedaydate', 'langconfig');
