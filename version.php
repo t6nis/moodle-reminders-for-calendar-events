@@ -25,17 +25,10 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2016062600;
+$plugin->version   = 2016062603;
 $plugin->requires  = 2013051400;        // require moodle 3.0 or higher
 $plugin->release   = '1.5';
 $plugin->maturity  = MATURITY_RC;
 $plugin->component = 'local_reminders';
-
-global $CFG;
-if ($CFG->version > 2014051200) {
-    $plugin->cron = 86400;  // Default: 900, will run for 15-minutes, 86400 if we use tasks
-}else{
-    $plugin->cron = 900;
-}
-
+$plugin->cron      = 60;
 

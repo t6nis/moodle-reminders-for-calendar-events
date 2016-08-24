@@ -93,6 +93,21 @@ function xmldb_local_reminders_upgrade($oldversion) {
         // Reminders savepoint reached.
         upgrade_plugin_savepoint(true, 2014121301, 'local', 'reminders');
     }
+    
+    if ($oldversion < 2016062603) {
+        // Define table local_reminders_course to be created.
+        $table = new xmldb_table('local_reminders');
+        $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('time', XMLDB_TYPE_CHAR, '16', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('type', XMLDB_TYPE_CHAR, '32', null, null, null, null);
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, array('id'));
+        // Conditionally launch create table for local_reminders_course.
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
 
+        // Reminders savepoint reached.
+        upgrade_plugin_savepoint(true, 2016062603, 'local', 'reminders');
+    }
     return true;
 }
