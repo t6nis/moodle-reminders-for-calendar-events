@@ -30,5 +30,5 @@ $plugin->requires  = 2013051400;        // require moodle 3.0 or higher
 $plugin->release   = '1.5';
 $plugin->maturity  = MATURITY_RC;
 $plugin->component = 'local_reminders';
-$plugin->cron      = 60;
+$plugin->cron      = 900;
 
