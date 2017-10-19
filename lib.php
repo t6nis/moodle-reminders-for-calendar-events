@@ -613,7 +613,7 @@ function isemptyString($str) {
 }
 
 // < 2.9 extends after 2.9 just extend..
-function local_reminders_extends_settings_navigation($settingsnav, $context) {
+function local_reminders_extend_settings_navigation($settingsnav, $context) {
     global $CFG, $PAGE;
  
     // Only add this settings item on non-site course pages.
